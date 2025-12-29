@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# API keys and secrets
+.env
+
+# Data directories (user-specific content)
+books/
+brains/
+
+# IDE
+.idea/
+.vscode/
+
+# Generated files
+graph.html
+*.lock
