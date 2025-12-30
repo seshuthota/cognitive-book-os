@@ -1,4 +1,4 @@
-# Cognitive Book OS — User Documentation (v3.0)
+# Cognitive Book OS — User Documentation (v4.0)
 
 > **Transform long documents into structured, queryable knowledge bases using AI.**
 
@@ -6,19 +6,18 @@ Cognitive Book OS reads documents chapter-by-chapter, extracts and organizes inf
 
 ---
 
-## What's New in v3.0
-- **Enrichment Loop**: Scan previously skipped chapters for new objectives without re-reading the entire book.
-- **Active Learning (Auto-Enrich)**: Query with `--auto-enrich` and the system will automatically scan skipped chapters if it can't answer your question.
-- **Hybrid Gap Detection**: Combines literal string matching ($0 cost) with LLM Chain-of-Thought reasoning for smart enrichment triggers.
-- **State Tracking**: `processing_log.json` now tracks exactly which chapters were extracted vs skipped (and why).
-- **File Locking**: Safe concurrent access to brain metadata.
+## What's New in v4.0 (Foundation First)
+- **Provenance Protocol**: All extracted facts and claims MUST include direct quotes (`> "Quote" (Source: Page)`) for maximum reliability.
+- **User Ground Truth**: Use the `notes/` directory to add manual observations or overrides. The engine treats these as absolute truth.
+- **Hypothesis Testing (`verify`)**: New dual-pass command to scientifically test claims against the brain.
+- **Knowledge Mapping (`summary`)**: Generates lightweight synopses of entire topic directories.
 
-### Previous (v2.0)
+### Previous (v3.0)
+- Enrichment Loop / Active Learning
+- Hybrid Gap Detection (Literal + LLM)
+- State Tracking & File Locking
 - Ingestion Strategies (Standard/Triage)
-- Knowledge Graph with `related` links
-- Forensic Extraction Protocol
-- The Gardener (duplicate detection)
-- Interactive Visualizer
+- Knowledge Graph & Interactive Visualizer
 
 ---
 
@@ -120,7 +119,25 @@ uv run python -m src.cognitive_book_os optimize <BRAIN>
 
 ---
 
-### 5. `viz` — Visualize Knowledge
+### 5. `verify` — Hypothesis Testing
+
+Scientifically test a claim or hypothesis. Performs dual-pass retrieval (searching for both supporting and conflicting evidence) and presents a structured verdict.
+
+```bash
+uv run python -m src.cognitive_book_os verify <BRAIN> --claim "Topic to test"
+```
+
+### 6. `summary` — Knowledge Mapping
+
+Generate a lightweight summary of a specific topic directory (e.g., `characters/` or `themes/`).
+
+```bash
+uv run python -m src.cognitive_book_os summary <BRAIN> <TOPIC_DIR>
+```
+
+---
+
+### 7. `viz` — Visualize Knowledge
 
 Generate an interactive HTML visualization of your brain's connections.
 
@@ -141,6 +158,7 @@ brains/<name>/
 ├── timeline/               # Chronological events
 ├── themes/                 # Patterns and concepts
 ├── facts/                  # Quotes, data, statistics
+├── notes/                  # USER NOTES (Ground Truth)
 ├── meta/
 │   ├── processing_log.json # Chapter status tracking
 │   └── anchor_state.json   # Dynamic context

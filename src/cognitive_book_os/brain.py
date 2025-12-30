@@ -57,6 +57,7 @@ class Brain:
             "timeline", 
             "themes",
             "facts",
+            "notes",
             "meta"
         ]
         
@@ -78,8 +79,9 @@ This file tracks the structure of the knowledge base.
 
 - `characters/` - People and entities
 - `timeline/` - Chronological events
-- `themes/` - Recurring patterns and concepts
+- `themes/` - Recurring patterns and extracts
 - `facts/` - Standalone facts, quotes, data
+- `notes/` - User observations and overrides
 
 ## Files
 

@@ -132,8 +132,11 @@ def select_relevant_files(
     system_prompt = """You are a knowledge navigator. Given a question and a brain structure, 
 select which files would be most relevant to answer the question.
 
-Only select files that are likely to contain relevant information.
-You can select up to 10 files."""
+## PRIORITIZATION RULES
+1. **User Notes (`notes/`)**: These are CRITICAL. If any note seems remotely relevant, SELECT IT. They contain user overrides.
+2. **Relevance**: Select files that contain the answer.
+
+You can select up to 15 files."""
 
     brain_structure = brain.get_structure()
     all_files = brain.list_files()
@@ -264,6 +267,7 @@ def answer_from_brain(
     # Also include the objective response for context
     response = brain.get_response()
     
+
     user_prompt = f"""## Question
 {question}
 
@@ -275,7 +279,14 @@ def answer_from_brain(
 
 ---
 
-Please answer the question using the information from these files.
+## Instructions
+1. **Answer the question** using the provided files.
+2. **User Notes Priority**: If a file from `notes/` contradicts the book, the Note is the TRUTH. Mention the conflict: "The book says X, but your note clarifies Y."
+3. **Citations**: For every fact you state, you must cite the source file.
+   - Format: "Fact statement [source_file.md]."
+   - If available, use the direct quotes provided in the file.
+
+Answer:
 """
 
     return client.generate(

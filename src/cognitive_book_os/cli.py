@@ -268,12 +268,46 @@ def enrich(
     """
     Enrich an existing brain by scanning skipped chapters for a new objective.
     """
-    from .enrichment import EnrichmentManager
-    
     actual_provider = provider or auto_detect_provider()
+    from .enrichment import EnrichmentManager
     
     manager = EnrichmentManager(brain_name=brain)
     manager.enrich(new_objective=objective, provider=actual_provider, model=model)
+
+
+@app.command()
+def verify(
+    brain: str = typer.Argument(..., help="Name of the brain to verify against"),
+    claim: str = typer.Option(..., "--claim", "-c", help="The claim or hypothesis to value-test"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="LLM provider"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model to use")
+):
+    """
+    Verify a claim or hypothesis using dual-pass evidence search (Pro vs Con).
+    """
+    actual_provider = provider or auto_detect_provider()
+    from .verify import verify_claim
+    
+    verify_claim(
+        brain_name=brain,
+        claim=claim,
+        provider=actual_provider,
+        model=model,
+        brains_dir="brains"
+    )
+
+
+
+@app.command()
+def summary(
+    brain: str = typer.Argument(..., help="Name of the brain"),
+    topic: str = typer.Option("characters", "--topic", "-t", help="Topic to summarize (characters, themes, etc.)")
+):
+    """
+    Generate a lightweight map/summary of a topic directory.
+    """
+    from .summary import summarize_topic
+    summarize_topic(brain_name=brain, topic=topic, brains_dir="brains")
 
 
 def main():

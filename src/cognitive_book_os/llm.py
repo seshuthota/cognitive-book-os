@@ -122,6 +122,7 @@ class LLMClient:
             ],
             "temperature": temperature,
             "max_retries": max_retries,
+            "timeout": 120.0,
         }
         
         # Add max_tokens for all providers (Anthropic requires it, others accept it)
@@ -129,25 +130,34 @@ class LLMClient:
         
         # Enable streaming for Anthropic/MiniMax to avoid timeouts on long requests
         if self.provider in (PROVIDER_ANTHROPIC, PROVIDER_MINIMAX):
-            # Use create_partial which handles formatting for streaming correctly
-            # and prevents "Stream object has no attribute content" errors
-            stream_result = self.client.chat.completions.create_partial(**kwargs)
-            
-            final_obj = None
-            for obj in stream_result:
-                final_obj = obj
-            
-            # Ensure we return a strict instance of the model
-            if final_obj:
-                try:
-                    # Re-validate to ensure it's the strict model T, not Partial[T]
-                    # The model now handles data repair (e.g. string -> list) via validators
-                    return response_model.model_validate(final_obj.model_dump())
-                except Exception as e:
-                    logger.error(f"Validation failed for streaming response. Error: {e}")
-                    logger.error(f"Raw object content: {final_obj.model_dump()}")
-                    raise e
-            return final_obj
+            try:
+                # Use create_partial which handles formatting for streaming correctly
+                # and prevents "Stream object has no attribute content" errors
+                stream_result = self.client.chat.completions.create_partial(**kwargs)
+                
+                final_obj = None
+                for obj in stream_result:
+                    # Update status if we have a way to track it, otherwise just collect patches
+                    final_obj = obj
+                
+                # Ensure we return a strict instance of the model
+                if final_obj:
+                    try:
+                        # Re-validate to ensure it's the strict model T, not Partial[T]
+                        return response_model.model_validate(final_obj.model_dump())
+                    except Exception as e:
+                        logger.error(f"Validation failed for streaming response. Error: {e}")
+                        logger.error(f"Raw object content: {final_obj.model_dump()}")
+                        raise e
+                
+                # If streaming failed to return anything, fall back to non-streaming
+                if final_obj is None:
+                    logger.warning("Streaming returned no results. Falling back to non-streaming call.")
+                    return self.client.chat.completions.create(**kwargs)
+                    
+            except Exception as e:
+                logger.warning(f"Streaming call failed: {e}. Falling back to non-streaming.")
+                return self.client.chat.completions.create(**kwargs)
 
         # Standard non-streaming call for others
         return self.client.chat.completions.create(**kwargs)
@@ -182,7 +192,8 @@ class LLMClient:
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=temperature,
-                stream=True
+                stream=True,
+                timeout=120.0
             )
             
             # Iterate stream to collect text
