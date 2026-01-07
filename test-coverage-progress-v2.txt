@@ -1,0 +1,6 @@
+# Test Coverage Progress v2
+
+## Iteration 1
+- **Tested**: brain.py get_objective() - user retrieves their original query from a brain
+- **Coverage**: 92% (68 missing lines, was 72)
+- **Learning**: get_objective() parses markdown to extract just the user's question text

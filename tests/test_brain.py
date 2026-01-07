@@ -169,3 +169,20 @@ class TestBrainInitialization:
             assert "# Brain Index" in index
             assert "characters/" in index
             assert "timeline/" in index
+
+
+class TestBrainObjectiveAndResponse:
+    """Tests for getting and updating brain objective and response."""
+
+    def test_get_objective_returns_user_query(self):
+        """Test that get_objective retrieves the user's original question from brain."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            brain = Brain("test-brain", base_path=tmpdir)
+            
+            user_objective = "What are the main themes and character arcs in this novel?"
+            brain.initialize(user_objective)
+            
+            # User should be able to retrieve their original objective
+            retrieved = brain.get_objective()
+            
+            assert retrieved == user_objective
