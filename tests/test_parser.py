@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from cognitive_book_os.parser import split_into_chunks
+from cognitive_book_os.parser import split_into_chunks, detect_chapters
 
 
 class TestSplitIntoChunks:
@@ -74,3 +74,75 @@ class TestSplitIntoChunks:
         if len(chunks) >= 2:
             # Due to overlap, chunk sizes should be close to chunk_size
             assert 800 <= len(chunks[0]) <= 1000
+
+
+class TestDetectChapters:
+    """Tests for chapter detection in documents."""
+
+    def test_detect_standard_chapter_headings(self):
+        """Test detecting chapters with 'Chapter N' format."""
+        text = """
+Chapter 1: Introduction
+
+This is the introduction content.
+
+Chapter 2: The Main Story
+
+This is the main story content.
+
+Chapter 3: Conclusion
+
+This is the conclusion.
+"""
+        chapters = detect_chapters(text)
+        
+        # Should detect 3 chapters
+        assert len(chapters) >= 3
+        
+        # Check chapter titles
+        titles = [ch.title for ch in chapters]
+        assert any("Introduction" in t for t in titles)
+        assert any("Main Story" in t for t in titles)
+
+    def test_detect_uppercase_chapter_headings(self):
+        """Test detecting CHAPTER format (uppercase)."""
+        text = """
+CHAPTER 1: FIRST PART
+
+Content of first chapter.
+
+CHAPTER 2: SECOND PART
+
+Content of second chapter.
+"""
+        chapters = detect_chapters(text)
+        
+        assert len(chapters) >= 2
+        assert any("FIRST PART" in ch.title or "First Part" in ch.title for ch in chapters)
+
+    def test_detect_numbered_headings(self):
+        """Test detecting '1. Title' format."""
+        text = """
+1. First Section
+
+Content here.
+
+2. Second Section
+
+More content.
+"""
+        chapters = detect_chapters(text)
+        
+        # Should detect sections
+        assert len(chapters) >= 2
+
+    def test_no_chapters_returns_full_document(self):
+        """Test that text without chapter markers returns whole document as one chapter."""
+        text = "This is just regular text without any chapter markers at all."
+        
+        chapters = detect_chapters(text)
+        
+        # Should return single chapter with full document
+        assert len(chapters) == 1
+        # Default title is "Full Document" or chapter 0 (based on code inspection)
+        assert "regular text" in chapters[0].content
