@@ -7,7 +7,70 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from cognitive_book_os.parser import split_into_chunks, detect_chapters, chunk_document
+from cognitive_book_os.parser import (
+    split_into_chunks,
+    detect_chapters,
+    chunk_document,
+    extract_pages_from_pdf,
+)
+
+
+class TestExtractPagesFromPDF:
+    """Tests for page-by-page PDF extraction - critical for provenance tracking."""
+
+    @pytest.fixture
+    def multi_page_pdf(self, tmp_path):
+        """Create a multi-page PDF to test page extraction."""
+        pdf_path = tmp_path / "multipage.pdf"
+        doc = fitz.open()
+        
+        # Create 3 pages with different content - simulating real user documents
+        page1 = doc.new_page()
+        page1.insert_text((50, 50), "Page 1: Introduction to the topic.")
+        
+        page2 = doc.new_page()
+        page2.insert_text((50, 50), "Page 2: Details and analysis.")
+        
+        page3 = doc.new_page()
+        page3.insert_text((50, 50), "Page 3: Conclusion and summary.")
+        
+        doc.save(pdf_path)
+        doc.close()
+        
+        return pdf_path
+
+    def test_extract_pages_returns_page_number_and_text(self, multi_page_pdf):
+        """Test that extract_pages_from_pdf() returns correct page numbers and content."""
+        # Users rely on this for page-level provenance tracking
+        pages = extract_pages_from_pdf(multi_page_pdf)
+        
+        # Should return list of (page_number, text) tuples
+        assert len(pages) == 3
+        
+        # Page numbers should be 1-indexed (user-friendly)
+        page_numbers = [page_num for page_num, _ in pages]
+        assert page_numbers == [1, 2, 3]
+        
+        # Each page should have its specific content
+        page_texts = [text for _, text in pages]
+        assert "Page 1: Introduction" in page_texts[0]
+        assert "Page 2: Details" in page_texts[1]
+        assert "Page 3: Conclusion" in page_texts[2]
+
+    def test_extract_pages_from_single_page_pdf(self, tmp_path):
+        """Test handling of single-page PDFs (common user scenario)."""
+        pdf_path = tmp_path / "single.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), "Only one page here.")
+        doc.save(pdf_path)
+        doc.close()
+        
+        pages = extract_pages_from_pdf(pdf_path)
+        
+        assert len(pages) == 1
+        assert pages[0][0] == 1  # Page number
+        assert "Only one page" in pages[0][1]  # Content
 
 
 class TestSplitIntoChunks:
