@@ -109,3 +109,63 @@ class TestBrainFileOperations:
             
             # Now it should exist
             assert brain.exists() is True
+
+
+class TestBrainInitialization:
+    """Tests for brain initialization and setup."""
+
+    def test_initialize_creates_directory_structure(self):
+        """Test that initialize creates the expected brain directory structure."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            brain = Brain("test-brain", base_path=tmpdir)
+            
+            objective = "Summarize the key themes in this document."
+            brain.initialize(objective)
+            
+            # Verify directories were created
+            assert (brain.path / "characters").exists()
+            assert (brain.path / "timeline").exists()
+            assert (brain.path / "themes").exists()
+            assert (brain.path / "facts").exists()
+            assert (brain.path / "notes").exists()
+            assert (brain.path / "meta").exists()
+
+    def test_initialize_creates_objective_file(self):
+        """Test that initialize stores the user's objective."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            brain = Brain("test-brain", base_path=tmpdir)
+            
+            objective = "Extract all character relationships."
+            brain.initialize(objective)
+            
+            # Verify objective file was created
+            objective_content = brain.read_file("_objective.md")
+            assert objective_content is not None
+            assert objective in objective_content
+            assert "# Objective" in objective_content
+
+    def test_initialize_creates_response_file(self):
+        """Test that initialize creates empty response placeholder."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            brain = Brain("test-brain", base_path=tmpdir)
+            
+            brain.initialize("Test objective")
+            
+            # Verify response file exists
+            response = brain.read_file("_response.md")
+            assert response is not None
+            assert "# Response" in response
+
+    def test_initialize_creates_index_file(self):
+        """Test that initialize creates brain index for navigation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            brain = Brain("test-brain", base_path=tmpdir)
+            
+            brain.initialize("Test objective")
+            
+            # Verify index file was created with structure info
+            index = brain.read_file("_index.md")
+            assert index is not None
+            assert "# Brain Index" in index
+            assert "characters/" in index
+            assert "timeline/" in index
