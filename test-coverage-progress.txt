@@ -1,0 +1,36 @@
+# Test Coverage Progress
+
+## Iteration 1
+- **Tested**: print_models() function displays model catalog to CLI users
+- **Coverage**: config.py 76% -> 92% (+16%)
+- **Learning**: CLI output functions are critical user-facing features worth testing with capsys
+
+## Iteration 2
+- **Tested**: split_into_chunks() handles text splitting with overlap and boundary detection
+- **Coverage**: parser.py 0% -> 37% (+37%)
+- **Learning**: Text chunking is core to document ingestion pipeline users depend on
+
+## Iteration 3
+- **Tested**: Brain file operations (write/read/delete/list) for knowledge base
+- **Coverage**: brain.py 0% -> 47% (+47%)
+- **Learning**: File-based brain operations are the foundation users interact with
+
+## Iteration 4
+- **Tested**: Brain initialization creates directory structure and metadata files
+- **Coverage**: brain.py 47% -> 58% (+11%)
+- **Learning**: Initialization sets up the brain workspace users need for processing
+
+## Iteration 5
+- **Tested**: detect_chapters() identifies chapter boundaries from text patterns
+- **Coverage**: parser.py 37% -> 69% (+32%)
+- **Learning**: Chapter detection helps users organize long documents automatically
+
+## Iteration 6
+- **Tested**: Prompt loading, listing, and variable substitution
+- **Coverage**: prompts.py 0% -> 73% (+73%)
+- **Learning**: Prompt templates are critical for LLM interactions users depend on
+
+## Iteration 7
+- **Tested**: chunk_document() processes PDFs with chapter detection
+- **Coverage**: parser.py 69% -> 83% (+14%)
+- **Learning**: chunk_document() is the main entry point users call to process PDFs - critical workflow
