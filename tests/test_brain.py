@@ -186,3 +186,31 @@ class TestBrainObjectiveAndResponse:
             retrieved = brain.get_objective()
             
             assert retrieved == user_objective
+
+    def test_get_and_update_response_retrieves_answer(self):
+        """Test that users can retrieve and update the brain's synthesized answer."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            brain = Brain("test-brain", base_path=tmpdir)
+            brain.initialize("What is the main theme?")
+            
+            # After initialization, response exists with placeholder
+            initial_response = brain.get_response()
+            assert "# Response" in initial_response
+            assert "Processing not yet started" in initial_response
+            
+            # System updates the response after ingestion
+            synthesized_answer = """# Response
+
+The main theme of this work is the struggle between ambition and morality.
+
+## Key Evidence
+
+- Chapter 3: "The protagonist faces a choice between success and integrity."
+- Chapter 7: Resolution shows consequences of earlier choices.
+"""
+            brain.update_response(synthesized_answer)
+            
+            # User retrieves the synthesized answer
+            final_response = brain.get_response()
+            assert "ambition and morality" in final_response
+            assert "Chapter 3" in final_response
