@@ -34,3 +34,8 @@
 - **Tested**: chunk_document() processes PDFs with chapter detection
 - **Coverage**: parser.py 69% -> 83% (+14%)
 - **Learning**: chunk_document() is the main entry point users call to process PDFs - critical workflow
+
+## Iteration 8
+- **Tested**: extract_pages_from_pdf() returns page numbers and content for provenance tracking
+- **Coverage**: parser.py 83% -> 90% (+7%)
+- **Learning**: Page-level extraction is critical for users tracking sources and citations
