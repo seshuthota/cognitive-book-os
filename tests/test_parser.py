@@ -2,10 +2,12 @@
 
 import sys
 from pathlib import Path
+import fitz  # PyMuPDF
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from cognitive_book_os.parser import split_into_chunks, detect_chapters
+from cognitive_book_os.parser import split_into_chunks, detect_chapters, chunk_document
 
 
 class TestSplitIntoChunks:
@@ -146,3 +148,58 @@ More content.
         assert len(chapters) == 1
         # Default title is "Full Document" or chapter 0 (based on code inspection)
         assert "regular text" in chapters[0].content
+
+
+class TestChunkDocument:
+    """Tests for PDF document chunking - the main entry point users rely on."""
+
+    @pytest.fixture
+    def sample_pdf(self, tmp_path):
+        """Create a sample PDF with chapter structure for testing."""
+        pdf_path = tmp_path / "test_doc.pdf"
+        doc = fitz.open()
+        
+        # Create a multi-chapter PDF that users would typically process
+        content = """Chapter 1: Introduction
+
+This is the introduction to our test document. It contains enough content
+to verify that the chunking system works correctly for typical user workflows.
+
+Chapter 2: Main Content
+
+This chapter has the main content. When users process PDFs, they expect
+the system to intelligently detect chapter boundaries and create meaningful
+chunks that preserve document structure.
+
+Chapter 3: Conclusion
+
+The final chapter wraps up our test document with concluding remarks."""
+        
+        page = doc.new_page()
+        page.insert_text((50, 50), content)
+        doc.save(pdf_path)
+        doc.close()
+        
+        return pdf_path
+
+    def test_chunk_document_detects_chapters(self, sample_pdf):
+        """Test that chunk_document() correctly processes PDF chapters for users."""
+        # This is the main function users call to process their PDFs
+        chunks = list(chunk_document(sample_pdf, use_chapters=True))
+        
+        # Should detect the 3 chapters
+        assert len(chunks) >= 3
+        
+        # Each chunk is (number, title, content)
+        numbers, titles, contents = zip(*chunks)
+        
+        # Verify chapter detection worked
+        assert any("Introduction" in title for title in titles)
+        assert any("Main Content" in title for title in titles)
+        assert any("Conclusion" in title for title in titles)
+        
+        # Verify content is extracted
+        full_content = " ".join(contents)
+        assert "introduction to our test document" in full_content.lower()
+        assert "intelligently detect chapter boundaries" in full_content.lower()
+
