@@ -1,7 +1,13 @@
-"""LLM model configurations and provider settings."""
+"""LLM model configurations and provider settings.
 
-from dataclasses import dataclass
+Configuration can be loaded from a config.yaml file. If not found, falls back
+to hardcoded defaults. This allows users to customize models without modifying code.
+"""
+
+from dataclasses import dataclass, fields
 from typing import Optional
+from pathlib import Path
+import yaml
 
 
 @dataclass
@@ -40,8 +46,8 @@ MINIMAX_BASE_URL = "https://api.minimax.io/anthropic"
 # Default Brain Model (Primary high-intelligence model)
 BRAIN_MODEL = "claude-3-5-sonnet-20241022"
 
-# Model catalog - popular models with their configs
-MODELS = {
+# Hardcoded model catalog - used as fallback if config.yaml not found
+HARDCODED_MODELS = {
     # OpenAI models
     "gpt-4o": ModelConfig(
         id="gpt-4o",
@@ -59,7 +65,7 @@ MODELS = {
         cost_per_1k_input=0.00015,
         cost_per_1k_output=0.0006,
     ),
-    
+
     # Anthropic models
     "claude-sonnet-4-20250514": ModelConfig(
         id="claude-sonnet-4-20250514",
@@ -77,7 +83,7 @@ MODELS = {
         cost_per_1k_input=0.003,
         cost_per_1k_output=0.015,
     ),
-    
+
     # OpenRouter models (use provider/model format)
     "anthropic/claude-sonnet-4-20250514": ModelConfig(
         id="anthropic/claude-sonnet-4-20250514",
@@ -138,6 +144,65 @@ MODELS = {
         cost_per_1k_output=0.0004,
     ),
 }
+
+# Global MODELS dict - loaded from config.yaml or fallback to hardcoded
+MODELS: dict[str, ModelConfig] = {}
+
+
+def _load_config_from_yaml() -> dict:
+    """Load configuration from config.yaml if it exists."""
+    config_paths = [
+        Path("config.yaml"),
+        Path(__file__).parent.parent.parent / "config.yaml",
+    ]
+
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                with open(config_path, "r") as f:
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Failed to load config.yaml: {e}. Using hardcoded defaults.")
+                break
+
+    return {}
+
+
+def _build_model_from_dict(data: dict) -> ModelConfig:
+    """Build a ModelConfig from a dictionary."""
+    field_names = {f.name for f in fields(ModelConfig)}
+    kwargs = {k: v for k, v in data.items() if k in field_names}
+    return ModelConfig(**kwargs)
+
+
+def _initialize_config():
+    """Initialize MODELS from config.yaml or hardcoded defaults."""
+    global MODELS, DEFAULT_MODELS, BRAIN_MODEL
+
+    yaml_config = _load_config_from_yaml()
+
+    if yaml_config and "models" in yaml_config:
+        # Load from config.yaml
+        for model_id, model_data in yaml_config["models"].items():
+            MODELS[model_id] = _build_model_from_dict(model_data)
+
+        # Override default models if specified
+        if "providers" in yaml_config:
+            for provider, settings in yaml_config["providers"].items():
+                if "default_model" in settings:
+                    DEFAULT_MODELS[provider] = settings["default_model"]
+
+        # Override brain model if specified
+        if "brain_model" in yaml_config:
+            BRAIN_MODEL = yaml_config["brain_model"]
+    else:
+        # Use hardcoded defaults
+        MODELS = HARDCODED_MODELS.copy()
+
+
+# Initialize configuration on module import
+_initialize_config()
 
 
 def get_model_config(model_id: str) -> Optional[ModelConfig]:

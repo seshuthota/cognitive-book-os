@@ -4,6 +4,7 @@ from pathlib import Path
 from rich.console import Console
 
 from .brain import Brain
+from .claim_store import ClaimStore, claims_versioning_enabled
 from .llm import LLMClient, get_client
 from .models import ObjectiveSynthesis
 from .parser import chunk_document
@@ -135,6 +136,8 @@ def process_document(
     
     # Initialize brain
     brain = Brain(name=brain_name, base_path=brains_dir)
+    claim_store = ClaimStore(brain) if claims_versioning_enabled() else None
+    audit_run_id: str | None = None
     
     # Determine effective objective for logging/archiving
     effective_objective = objective or "General Comprehensive Knowledge Extraction"
@@ -161,76 +164,108 @@ def process_document(
     # Get Strategy
     strategy = get_strategy(strategy_name)
     
-    # Process document chapter by chapter
-    chunks = list(chunk_document(document_path))
-    total_chapters = len(chunks)
-    
-    brain.update_processing_log(total_chapters=total_chapters)
-    
-    console.print(f"Found {total_chapters} chapters/chunks to process")
-    console.print()
-    
-    for i, (chunk_num, chunk_title, chunk_content) in enumerate(chunks):
-        current_chapter_num = i + 1
-        
-        # 1. Skip if before start_from (Resume logic)
-        # 2. Skip if not in allowed_chapters (Enrichment logic)
-        
-        if allowed_chapters:
-            if current_chapter_num not in allowed_chapters:
-                continue
-        elif i < start_from:
-            continue
-            
-        console.print(f"[bold]Chapter {current_chapter_num}/{total_chapters}: {chunk_title}[/bold]")
-        
-        # Execute Strategy (Expects ChapterState return now)
-        chapter_state = strategy.process_chapter(
-            chapter_content=chunk_content,
-            chapter_title=chunk_title,
-            chapter_num=current_chapter_num,
-            brain=brain,
-            client=client,
-            objective=objective,
-            fast_mode=fast_mode
+    if claim_store:
+        audit_run_id = claim_store.start_run(
+            run_type="ingest",
+            objective=effective_objective,
+            provider=provider,
+            model=client.model,
+            metadata={
+                "strategy": strategy_name,
+                "fast_mode": fast_mode,
+                "allowed_chapters": allowed_chapters or [],
+                "document_path": str(document_path),
+            },
         )
-        
-        # Update progress and log state
-        log = brain.get_processing_log()
-        
-        # Update the chapter map
-        log.chapter_map[str(current_chapter_num)] = chapter_state
-        
-        # Update counters (only if linear)
-        if not allowed_chapters:
-            log.chapters_processed = current_chapter_num
-            log.last_processed_chapter = current_chapter_num
-            
-        # Write back to file
-        brain.update_processing_log(
-            chapter_map=log.chapter_map,
-            chapters_processed=log.chapters_processed,
-            last_processed_chapter=log.last_processed_chapter
-        )
-        
+
+    try:
+        # Process document chapter by chapter
+        chunks = list(chunk_document(document_path))
+        total_chapters = len(chunks)
+
+        brain.update_processing_log(total_chapters=total_chapters)
+
+        console.print(f"Found {total_chapters} chapters/chunks to process")
         console.print()
-    
-    # Final synthesis (only if objective provided)
-    if objective:
-        if fast_mode:
-            console.print("[bold cyan]Running final synthesis...[/bold cyan]")
-            final_synthesis(brain, client)
-    else:
-        console.print("[dim]Skipping synthesis (no objective provided). Brain built successfully.[/dim]")
-    
-    # Mark as complete ONLY if linear run finished
-    if not allowed_chapters:
-        brain.update_processing_log(status="complete")
-    
+
+        for i, (chunk_num, chunk_title, chunk_content) in enumerate(chunks):
+            current_chapter_num = i + 1
+
+            # 1. Skip if before start_from (Resume logic)
+            # 2. Skip if not in allowed_chapters (Enrichment logic)
+            if allowed_chapters:
+                if current_chapter_num not in allowed_chapters:
+                    continue
+            elif i < start_from:
+                continue
+
+            console.print(f"[bold]Chapter {current_chapter_num}/{total_chapters}: {chunk_title}[/bold]")
+
+            # Execute Strategy (Expects ChapterState return now)
+            chapter_state = strategy.process_chapter(
+                chapter_content=chunk_content,
+                chapter_title=chunk_title,
+                chapter_num=current_chapter_num,
+                brain=brain,
+                client=client,
+                objective=objective,
+                fast_mode=fast_mode,
+                run_id=audit_run_id,
+            )
+
+            # Update progress and log state
+            log = brain.get_processing_log()
+
+            # Update the chapter map
+            log.chapter_map[str(current_chapter_num)] = chapter_state
+
+            # Update counters (only if linear)
+            if not allowed_chapters:
+                log.chapters_processed = current_chapter_num
+                log.last_processed_chapter = current_chapter_num
+
+            # Write back to file
+            brain.update_processing_log(
+                chapter_map=log.chapter_map,
+                chapters_processed=log.chapters_processed,
+                last_processed_chapter=log.last_processed_chapter
+            )
+
+            console.print()
+
+        # Final synthesis (only if objective provided)
+        if objective:
+            if fast_mode:
+                console.print("[bold cyan]Running final synthesis...[/bold cyan]")
+                final_synthesis(brain, client)
+        else:
+            console.print("[dim]Skipping synthesis (no objective provided). Brain built successfully.[/dim]")
+
+        # Mark as complete ONLY if linear run finished
+        if not allowed_chapters:
+            brain.update_processing_log(status="complete")
+
+    except Exception as exc:
+        if claim_store and audit_run_id:
+            claim_store.finish_run(
+                run_id=audit_run_id,
+                run_type="ingest",
+                status="failed",
+                error=str(exc),
+            )
+        raise
+
+    if claim_store and audit_run_id:
+        claim_store.finish_run(
+            run_id=audit_run_id,
+            run_type="ingest",
+            status="completed",
+        )
+
     console.print(f"[bold green]Processing complete![/bold green]")
     console.print(f"Brain saved to: {brain.path}")
     console.print(f"Final response: {brain.path}/_response.md")
-    
+
     return brain
 
 
@@ -302,4 +337,3 @@ Based on ALL the information in the knowledge base, provide a comprehensive resp
     
     brain.update_response(response_content)
     console.print(f"  [dim]Confidence: {result.confidence.value}[/dim]")
-

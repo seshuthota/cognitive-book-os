@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Any
 from enum import Enum
 from datetime import datetime
 
@@ -146,3 +146,138 @@ class VerificationResult(BaseModel):
     conflicting_points: List[str] = Field(default_factory=list, description="List of conflicting evidence strings")
     verdict: str = Field(..., description="Final verdict: Confirmed, Refuted, Ambiguous, or Unverified")
     reasoning: Optional[str] = Field(None, description="Explanation of the verdict")
+
+
+class ClaimStatus(str, Enum):
+    """Lifecycle status for a claim snapshot."""
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    DELETED = "deleted"
+
+
+class ClaimSnapshot(BaseModel):
+    """Latest materialized state for a claim."""
+    claim_id: str
+    revision_id: str
+    status: ClaimStatus = ClaimStatus.ACTIVE
+    brain_name: str
+    file_path: str
+    claim_text: str
+    evidence_quote: str
+    source_locator: str
+    confidence: Confidence = Confidence.MEDIUM
+    tags: List[str] = Field(default_factory=list)
+    related_claim_ids: List[str] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+    created_by_run: str
+    updated_by_run: str
+    supersedes_revision_id: Optional[str] = None
+    user_override: bool = False
+
+
+class ClaimEvent(BaseModel):
+    """Append-only event for claim lifecycle/audit."""
+    event_id: str
+    event_type: str
+    timestamp: str
+    brain_name: str
+    run_id: str
+    claim_id: Optional[str] = None
+    revision_id: Optional[str] = None
+    file_path: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RunRecord(BaseModel):
+    """Run metadata for ingestion/enrichment/query auditing."""
+    run_id: str
+    run_type: str
+    brain_name: str
+    objective: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    started_at: str
+    finished_at: Optional[str] = None
+    status: str = "started"
+    error: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class QueryTraceCompleteness(BaseModel):
+    """Coverage summary for claim traceability."""
+    total_statements: int = 0
+    linked_statements: int = 0
+    completeness_ratio: float = 0.0
+
+
+class ClaimTraceItem(BaseModel):
+    """Claim-level evidence used in a query answer."""
+    claim_id: str
+    file_path: str
+    claim_text: str
+    evidence_quote: str
+    source_locator: str
+    confidence: Confidence = Confidence.MEDIUM
+    user_override: bool = False
+
+
+class QueryAuditResult(BaseModel):
+    """Audited query result with claim-level traceability."""
+    answer: str
+    sources: List[str] = Field(default_factory=list)
+    confidence: Confidence
+    claim_trace: List[ClaimTraceItem] = Field(default_factory=list)
+    trace_completeness: QueryTraceCompleteness = Field(default_factory=QueryTraceCompleteness)
+    query_run_id: str
+
+
+class PerBrainResult(BaseModel):
+    """Per-brain section in a multi-brain query response."""
+    brain_name: str
+    answer_excerpt: str
+    confidence: Confidence
+    sources: List[str] = Field(default_factory=list)
+    claim_trace: List[ClaimTraceItem] = Field(default_factory=list)
+    trace_degraded: bool = False
+    trace_completeness_ratio: float = 0.0
+
+
+class ConflictItem(BaseModel):
+    """Cross-brain claim comparison result."""
+    topic: str
+    brains_involved: List[str] = Field(default_factory=list)
+    classification: str = Field(..., description="support|refute|ambiguous")
+    evidence: List[str] = Field(default_factory=list)
+
+
+class TraceabilitySummary(BaseModel):
+    """Aggregate traceability status across selected brains."""
+    brains_with_claims: int = 0
+    brains_without_claims: int = 0
+    overall_completeness_ratio: float = 0.0
+    degraded_brains: List[str] = Field(default_factory=list)
+
+
+class MultiBrainQueryRequest(BaseModel):
+    """Request contract for cross-brain orchestration."""
+    question: str
+    brains: List[str] = Field(default_factory=list)
+    provider: str = "anthropic"
+    model: Optional[str] = None
+    include_claim_trace: bool = True
+    include_conflicts: bool = True
+    max_brains: int = 5
+    max_files_per_brain: int = 12
+
+
+class MultiBrainQueryResult(BaseModel):
+    """Unified response across multiple brains."""
+    answer: str
+    confidence: Confidence
+    per_brain: List[PerBrainResult] = Field(default_factory=list)
+    conflicts: List[ConflictItem] = Field(default_factory=list)
+    sources: List[str] = Field(default_factory=list)
+    traceability: TraceabilitySummary = Field(default_factory=TraceabilitySummary)
+    query_run_id: str
+    warnings: List[str] = Field(default_factory=list)

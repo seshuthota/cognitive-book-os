@@ -1,0 +1,116 @@
+# Cognitive Book OS Configuration
+# This file allows customization of models and providers without modifying code.
+
+# Provider settings
+providers:
+  openai:
+    default_model: "gpt-4o"
+  anthropic:
+    default_model: "claude-sonnet-4-20250514"
+  openrouter:
+    default_model: "deepseek/deepseek-chat"
+    base_url: "https://openrouter.ai/api/v1"
+  minimax:
+    default_model: "MiniMax-M2.1"
+    base_url: "https://api.minimax.io/anthropic"
+
+# Brain model (primary high-intelligence model)
+brain_model: "claude-3-5-sonnet-20241022"
+
+# Model catalog - override or add models here
+# Format:
+#   model_id:
+#     id: "model-id"
+#     name: "Display Name"
+#     provider: "openai|anthropic|openrouter|minimax"
+#     context_window: 128000
+#     cost_per_1k_input: 0.0025  # USD
+#     cost_per_1k_output: 0.01   # USD
+#     supports_structured_output: true
+#     notes: ""
+
+models:
+  # OpenAI models
+  gpt-4o:
+    id: "gpt-4o"
+    name: "GPT-4o"
+    provider: "openai"
+    context_window: 128000
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.01
+  gpt-4o-mini:
+    id: "gpt-4o-mini"
+    name: "GPT-4o Mini"
+    provider: "openai"
+    context_window: 128000
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.0006
+
+  # Anthropic models
+  claude-sonnet-4-20250514:
+    id: "claude-sonnet-4-20250514"
+    name: "Claude Sonnet 4"
+    provider: "anthropic"
+    context_window: 200000
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+  claude-3-5-sonnet-20241022:
+    id: "claude-3-5-sonnet-20241022"
+    name: "Claude 3.5 Sonnet"
+    provider: "anthropic"
+    context_window: 200000
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+
+  # OpenRouter models (use provider/model format)
+  anthropic/claude-sonnet-4-20250514:
+    id: "anthropic/claude-sonnet-4-20250514"
+    name: "Claude Sonnet 4 (via OpenRouter)"
+    provider: "openrouter"
+    context_window: 200000
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+  openai/gpt-4o:
+    id: "openai/gpt-4o"
+    name: "GPT-4o (via OpenRouter)"
+    provider: "openrouter"
+    context_window: 128000
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.01
+  google/gemini-pro-1.5:
+    id: "google/gemini-pro-1.5"
+    name: "Gemini Pro 1.5 (via OpenRouter)"
+    provider: "openrouter"
+    context_window: 1000000
+    cost_per_1k_input: 0.00125
+    cost_per_1k_output: 0.005
+  google/gemini-flash-1.5:
+    id: "google/gemini-flash-1.5"
+    name: "Gemini Flash 1.5 (via OpenRouter)"
+    provider: "openrouter"
+    context_window: 1000000
+    cost_per_1k_input: 0.000075
+    cost_per_1k_output: 0.0003
+    notes: "Very fast and cheap"
+  meta-llama/llama-3.1-70b-instruct:
+    id: "meta-llama/llama-3.1-70b-instruct"
+    name: "Llama 3.1 70B (via OpenRouter)"
+    provider: "openrouter"
+    context_window: 131072
+    cost_per_1k_input: 0.00052
+    cost_per_1k_output: 0.00075
+  deepseek/deepseek-chat:
+    id: "deepseek/deepseek-chat"
+    name: "DeepSeek Chat (via OpenRouter)"
+    provider: "openrouter"
+    context_window: 64000
+    cost_per_1k_input: 0.00014
+    cost_per_1k_output: 0.00028
+    notes: "Very cost-effective"
+  qwen/qwen-2.5-72b-instruct:
+    id: "qwen/qwen-2.5-72b-instruct"
+    name: "Qwen 2.5 72B (via OpenRouter)"
+    provider: "openrouter"
+    context_window: 32768
+    cost_per_1k_input: 0.00035
+    cost_per_1k_output: 0.0004

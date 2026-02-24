@@ -4,20 +4,25 @@ from pathlib import Path
 from rich.console import Console
 
 from .brain import Brain
+from .claim_store import ClaimStore, claims_versioning_enabled, generate_run_id
 from .llm import LLMClient, get_client
-from .models import FileSelection, QueryResult, Confidence
+from .models import FileSelection, QueryResult, QueryAuditResult, Confidence
 from .enrichment import EnrichmentManager
 from .prompts import get_system_prompt
 
 console = Console()
 
+from langfuse import observe
+
+@observe(name="Query Brain")
 def query_brain(
     brain_name: str,
     question: str,
     provider: str = "anthropic",
     model: str | None = None,
     brains_dir: str = "brains",
-    auto_enrich: bool = False
+    auto_enrich: bool = False,
+    allow_interactive: bool = True,
 ) -> str:
     """
     Answer a question using an existing brain.
@@ -29,6 +34,7 @@ def query_brain(
         model: Optional model override
         brains_dir: Directory containing brains
         auto_enrich: Whether to automatically scan skipped chapters if answer is unknown
+        allow_interactive: If False, disables interactive confirmation prompts
         
     Returns:
         The answer string
@@ -83,8 +89,12 @@ def query_brain(
                 # If running non-interactively, this might hang or fail. 
                 # Ideally CLI handles this, but logic is here.
                 # using console.input works if attached to TTY.
-                response = console.input(f"[bold red]Warning:[/bold red] Auto-enrichment targets {len(chapters)} chapters. Proceed? [y/N] ")
-                if response.lower() != 'y':
+                if allow_interactive:
+                    response = console.input(f"[bold red]Warning:[/bold red] Auto-enrichment targets {len(chapters)} chapters. Proceed? [y/N] ")
+                    if response.lower() != 'y':
+                        proceed = False
+                else:
+                    console.print("[yellow]Auto-enrichment skipped in non-interactive mode (would process >5 chapters).[/yellow]")
                     proceed = False
             
             if proceed:
@@ -249,6 +259,69 @@ def answer_from_brain(
     Returns:
         QueryResult with the answer
     """
+    result, _ = _generate_answer_from_selection(question, brain, selected_files, client)
+    return result
+
+
+def answer_from_brain_with_audit(
+    question: str,
+    brain: Brain,
+    selected_files: list[str],
+    client: LLMClient,
+    run_id: str | None = None,
+) -> QueryAuditResult:
+    """
+    Generate an answer and attach claim-level traceability metadata.
+    """
+    result, expanded_files = _generate_answer_from_selection(question, brain, selected_files, client)
+    claim_store = ClaimStore(brain)
+    audit_run_id = run_id or generate_run_id("query", brain.name)
+
+    if claims_versioning_enabled():
+        audit_run_id = claim_store.start_run(
+            run_type="query",
+            objective=question,
+            provider=client.provider,
+            model=client.model,
+            metadata={"selected_files": selected_files, "expanded_files": expanded_files},
+        )
+
+    try:
+        audit_result = claim_store.build_query_audit(
+            question=question,
+            result=result,
+            default_sources=expanded_files,
+            run_id=audit_run_id,
+        )
+    except Exception:
+        if claims_versioning_enabled():
+            claim_store.finish_run(
+                run_id=audit_run_id,
+                run_type="query",
+                status="failed",
+                error="query_audit_build_failed",
+            )
+        raise
+
+    if claims_versioning_enabled():
+        claim_store.finish_run(
+            run_id=audit_run_id,
+            run_type="query",
+            status="completed",
+        )
+
+    return audit_result
+
+
+def _generate_answer_from_selection(
+    question: str,
+    brain: Brain,
+    selected_files: list[str],
+    client: LLMClient,
+) -> tuple[QueryResult, list[str]]:
+    """
+    Generate a query answer and return the expanded file set used for context.
+    """
     # Expand selection using Knowledge Graph
     expanded_files = expand_selection_with_graph(brain, selected_files)
     
@@ -289,12 +362,13 @@ def answer_from_brain(
 Answer:
 """
 
-    return client.generate(
+    result = client.generate(
         response_model=QueryResult,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=0.5
     )
+    return result, expanded_files
 
 
 

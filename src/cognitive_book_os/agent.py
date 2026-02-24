@@ -2,6 +2,10 @@
 
 Instead of structured outputs, this module gives the LLM actual tools
 to create/update/read files, making it more like a natural agent workflow.
+
+The agent loop is unified - a single implementation works for all providers
+(OpenAI, Anthropic, OpenRouter, MiniMax) via the LLMClient.complete_with_tools()
+method that abstracts provider differences.
 """
 
 import json
@@ -10,7 +14,8 @@ from pydantic import BaseModel, Field
 from rich.console import Console
 
 from .brain import Brain
-from .llm import LLMClient
+from .claim_store import ClaimStore, claims_versioning_enabled, generate_run_id
+from .llm import LLMClient, STANDARD_TOOLS
 
 console = Console()
 
@@ -23,227 +28,150 @@ class ToolResult(BaseModel):
     data: str | None = None
 
 
-# Tool definitions for the LLM
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "create_file",
-            "description": "Create a new file in the knowledge base. Use for new characters, events, themes, or facts.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative path for the file, e.g., 'characters/steve_jobs.md' or 'themes/reality_distortion.md'"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Full markdown content. MUST include YAML frontmatter with a 'summary' field (1-sentence description of key unique facts) for searchability."
-                    }
-                },
-                "required": ["path", "content"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_file",
-            "description": "Update an existing file with new information. Provide the complete updated content.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the existing file to update"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Complete updated markdown content (replaces existing)"
-                    }
-                },
-                "required": ["path", "content"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read the current content of a file in the knowledge base.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to read"
-                    }
-                },
-                "required": ["path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_files",
-            "description": "List all files currently in the knowledge base.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "done",
-            "description": "Signal that you have finished extracting and organizing all information from this chapter.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": {
-                        "type": "string",
-                        "description": "Brief summary of what was extracted and organized"
-                    }
-                },
-                "required": ["summary"]
-            }
-        }
-    }
-]
-
-
 class AgentToolExecutor:
-    """Executes tools called by the LLM agent."""
-    
-    def __init__(self, brain: Brain, chapter_num: int):
+    """Executes tools called by the LLM agent.
+
+    This class handles the tool execution logic, decoupled from the
+    provider-specific API calls. This makes it easy to test and maintain.
+    """
+
+    def __init__(self, brain: Brain, chapter_num: int, run_id: str | None = None):
         self.brain = brain
         self.chapter_num = chapter_num
         self.files_created = 0
         self.files_updated = 0
         self.is_done = False
         self.summary = ""
-    
+        self.run_id = run_id or generate_run_id("extract", brain.name)
+        self.claim_store = ClaimStore(brain) if claims_versioning_enabled() else None
+
     def execute(self, tool_name: str, args: dict) -> ToolResult:
         """Execute a tool and return the result."""
-        
-        if tool_name == "create_file":
-            return self._create_file(args["path"], args["content"])
-        elif tool_name == "update_file":
-            return self._update_file(args["path"], args["content"])
-        elif tool_name == "read_file":
-            return self._read_file(args["path"])
-        elif tool_name == "list_files":
-            return self._list_files()
-        elif tool_name == "done":
-            return self._done(args.get("summary", ""))
-        else:
-            return ToolResult(success=False, message=f"Unknown tool: {tool_name}")
-    
-    def _create_file(self, path: str, content: str) -> ToolResult:
+        handler = getattr(self, f"_handle_{tool_name}", None)
+        if handler:
+            return handler(args)
+        return ToolResult(success=False, message=f"Unknown tool: {tool_name}")
+
+    def _handle_create_file(self, args: dict) -> ToolResult:
         """Create a new file."""
+        path = args.get("path")
+        content = args.get("content")
         if not path or not content:
             return ToolResult(success=False, message="Path and content are required")
-        
-        # Ensure path has .md extension
+
         if not path.endswith(".md"):
             path = path + ".md"
-        
-        # Check if file exists
+
         existing = self.brain.read_file(path)
         if existing:
             return ToolResult(
-                success=False, 
+                success=False,
                 message=f"File already exists: {path}. Use update_file instead."
             )
-        
+
         self.brain.write_file(path, content)
+        tracking_error = self._track_claims(path=path, content=content)
+        if tracking_error:
+            return ToolResult(success=False, message=tracking_error)
         self.files_created += 1
         console.print(f"    [green]+ Created:[/green] {path}")
-        
         return ToolResult(success=True, message=f"Created {path}")
-    
-    def _update_file(self, path: str, content: str) -> ToolResult:
+
+    def _handle_update_file(self, args: dict) -> ToolResult:
         """Update an existing file."""
+        path = args.get("path")
+        content = args.get("content")
         if not path or not content:
             return ToolResult(success=False, message="Path and content are required")
-        
+
         if not path.endswith(".md"):
             path = path + ".md"
-        
+
         self.brain.write_file(path, content)
+        tracking_error = self._track_claims(path=path, content=content)
+        if tracking_error:
+            return ToolResult(success=False, message=tracking_error)
         self.files_updated += 1
         console.print(f"    [yellow]~ Updated:[/yellow] {path}")
-        
         return ToolResult(success=True, message=f"Updated {path}")
-    
-    def _read_file(self, path: str) -> ToolResult:
+
+    def _track_claims(self, path: str, content: str) -> str | None:
+        if not self.claim_store:
+            return None
+        try:
+            result = self.claim_store.track_file_claims(
+                file_path=path,
+                content=content,
+                run_id=self.run_id,
+            )
+            warnings = result.get("warnings", 0)
+            if warnings:
+                console.print(f"    [dim]Claim audit warnings: {warnings}[/dim]")
+            return None
+        except ValueError as exc:
+            return f"Claim provenance enforcement failed: {exc}"
+        except Exception as exc:
+            return f"Claim tracking failed: {exc}"
+
+    def _handle_read_file(self, args: dict) -> ToolResult:
         """Read a file's content."""
+        path = args.get("path")
+        if not path:
+            return ToolResult(success=False, message="Path is required")
+
         content = self.brain.read_file(path)
         if content:
             return ToolResult(success=True, message="File read successfully", data=content)
-        else:
-            return ToolResult(success=False, message=f"File not found: {path}")
-    
-    def _list_files(self) -> ToolResult:
+        return ToolResult(success=False, message=f"File not found: {path}")
+
+    def _handle_list_files(self, args: dict) -> ToolResult:
         """List all files in the brain."""
         files = self.brain.list_files()
         return ToolResult(
-            success=True, 
+            success=True,
             message=f"Found {len(files)} files",
             data="\n".join(files)
         )
-    
-    def _done(self, summary: str) -> ToolResult:
+
+    def _handle_done(self, args: dict) -> ToolResult:
         """Mark extraction as complete."""
         self.is_done = True
-        self.summary = summary
+        self.summary = args.get("summary", "")
         return ToolResult(success=True, message="Extraction complete")
 
 
-def run_extraction_agent(
-    chapter_content: str,
-    chapter_title: str,
+def _build_system_prompt(
+    brain_structure: str,
+    existing_files: list[str],
+    objective: str,
     chapter_num: int,
-    brain: Brain,
-    client: LLMClient,
-    max_iterations: int = 40  # Higher for thinking models
-) -> dict:
-    """
-    Run the extraction agent with tool calling.
-    
-    Args:
-        chapter_content: The chapter text
-        chapter_title: Title of the chapter
-        chapter_num: Chapter number
-        brain: The brain to write to
-        client: LLM client
-        max_iterations: Maximum tool calls before forcing completion
-        
-    Returns:
-        Dict with files_created, files_updated, summary
-    """
-    from .config import PROVIDER_ANTHROPIC, PROVIDER_MINIMAX
-    
-    executor = AgentToolExecutor(brain, chapter_num)
-    
-    # Get brain structure for context
-    brain_structure = brain.get_structure()
-    existing_files = brain.list_files()
-    objective = brain.get_objective()
-    
-    # Check if objective is generic/comprehensive
-    is_generic = "General Comprehensive Knowledge Extraction" in objective
-    
+    is_generic: bool
+) -> str:
+    """Build the system prompt based on whether objective is generic or specific."""
+    file_format = f"""```markdown
+---
+source: chapter_{chapter_num}
+tags: [tag1, tag2]
+summary: "One sentence specific summary of the unique data in this file."
+related: [path/to/related_file1.md, path/to/related_file2.md]
+---
+
+# Title
+
+**Synopsis**: Brief overview.
+
+**Key Details**:
+- [Detail]: Specific fact.
+
+**Quotes**:
+> "Relevant text from source"
+```"""
+
     if is_generic:
-        # Broader prompt for general ingestion
-        system_prompt = f"""You are the Archivist for Cognitive Book OS. Your job is to read a chapter and organize information into a structured knowledge base.
-    
+        return f"""You are the Archivist for Cognitive Book OS. Your job is to read a chapter and organize information into a structured knowledge base.
+
 ## Your Goal: FORENSIC DATA LOGGER
-Capture ALL significant structure, facts, events, and themes. Do not filter for a specific user question. But you must be High-Fidelity.
+Capture ALL significant structure, facts, events, and themes. Be comprehensive.
 
 ## Universal Extraction Protocol
 1. **Specifics over Generics**:
@@ -263,45 +191,23 @@ Capture ALL significant structure, facts, events, and themes. Do not filter for 
 - `facts/` - Data. Focus on raw numbers and tables.
 
 ## File Format (Strict)
-You MUST use this format. The `summary` field in YAML is critical for search.
-
-```markdown
----
-source: chapter_{chapter_num}
-tags: [tag1, tag2]
-summary: "One sentence specific summary of the unique data in this file."
-related: [path/to/related_file1.md, path/to/related_file2.md]
----
-
-# Title
-
-**Synopsis**: Brief overview.
-
-**Key Details**:
-- [Detail]: Specific fact.
-- [Detail]: Specific fact.
-
-**Quotes**:
-> "Relevant text from source"
-```
+{file_format}
 
 ## Rules
 1. Extract what is explicitly stated, not implied
 2. Use direct quotes where relevant
 3. Create separate files for distinct entities/concepts
-4. Be comprehensive - if it seems important to the author, extract it
+4. Be comprehensive
 5. Cross-reference related existing files in the `related` YAML field
 6. Call `done` when finished with this chapter
- 
+
 ## Current Brain Structure
 {brain_structure}
 
 ## Existing Files
-{chr(10).join(existing_files) if existing_files else "(No files yet)"}
-"""
+{chr(10).join(existing_files) if existing_files else "(No files yet)"}"""
     else:
-        # Targeted prompt for specific objective
-        system_prompt = f"""You are the Archivist for Cognitive Book OS. Your job is to read a chapter and organize information into a structured knowledge base.
+        return f"""You are the Archivist for Cognitive Book OS. Your job is to read a chapter and organize information into a structured knowledge base.
 
 ## The User's Objective
 {objective}
@@ -346,27 +252,7 @@ You are NOT a summarizer. Summaries lose data. Your job is to preserve specific 
 - `facts/` - Data. Focus on raw numbers and tables.
 
 ## File Format (Strict)
-You MUST use this format. The `summary` field in YAML is critical for search.
-
-```markdown
----
-source: chapter_{chapter_num}
-tags: [tag1, tag2]
-summary: "One sentence specific summary of the unique data in this file."
-related: [path/to/related_file1.md, path/to/related_file2.md]
----
-
-# Title
-
-**Synopsis**: Brief overview.
-
-**Key Details**:
-- [Detail]: Specific fact.
-- [Detail]: Specific fact.
-
-**Quotes**:
-> "Relevant text from source"
-```
+{file_format}
 
 ## Rules
 1. Extract what is explicitly stated, not implied
@@ -380,8 +266,52 @@ related: [path/to/related_file1.md, path/to/related_file2.md]
 {brain_structure}
 
 ## Existing Files
-{chr(10).join(existing_files) if existing_files else "(No files yet)"}
-"""
+{chr(10).join(existing_files) if existing_files else "(No files yet)"}"""
+
+
+from langfuse import observe
+
+@observe(name="Extraction Agent")
+def run_extraction_agent(
+    chapter_content: str,
+    chapter_title: str,
+    chapter_num: int,
+    brain: Brain,
+    client: LLMClient,
+    max_iterations: int = 40,  # Higher for thinking models
+    run_id: str | None = None,
+) -> dict:
+    """
+    Run the extraction agent with tool calling.
+
+    This unified implementation works for all LLM providers (OpenAI, Anthropic,
+    OpenRouter, MiniMax) by using LLMClient.complete_with_tools().
+
+    Args:
+        chapter_content: The chapter text
+        chapter_title: Title of the chapter
+        chapter_num: Chapter number
+        brain: The brain to write to
+        client: LLM client
+        max_iterations: Maximum tool calls before forcing completion
+
+    Returns:
+        Dict with files_created, files_updated, summary, iterations
+    """
+    executor = AgentToolExecutor(brain, chapter_num, run_id=run_id)
+
+    # Get brain structure for context
+    brain_structure = brain.get_structure()
+    existing_files = brain.list_files()
+    objective = brain.get_objective()
+
+    # Check if objective is generic/comprehensive
+    is_generic = "General Comprehensive Knowledge Extraction" in objective
+
+    # Build system prompt
+    system_prompt = _build_system_prompt(
+        brain_structure, existing_files, objective, chapter_num, is_generic
+    )
 
     user_message = f"""## Chapter {chapter_num}: {chapter_title}
 
@@ -391,259 +321,131 @@ related: [path/to/related_file1.md, path/to/related_file2.md]
 
 Please extract and organize the important information from this chapter. Use the tools to create/update files as needed. Call `done` when finished."""
 
-    # Determine if using Anthropic-style API (Anthropic or MiniMax)
-    is_anthropic_style = client.provider in (PROVIDER_ANTHROPIC, PROVIDER_MINIMAX)
-    
+    # Unified agent loop - works for all providers
+    messages = [{"role": "user", "content": user_message}]
     iterations = 0
-    
-    if is_anthropic_style:
-        # Anthropic-style tool calling
-        return _run_anthropic_agent(
-            client, executor, system_prompt, user_message,
-            max_iterations, chapter_num
-        )
-    else:
-        # OpenAI-style tool calling
-        return _run_openai_agent(
-            client, executor, system_prompt, user_message,
-            max_iterations
-        )
 
-
-def _run_openai_agent(
-    client: LLMClient,
-    executor: AgentToolExecutor,
-    system_prompt: str,
-    user_message: str,
-    max_iterations: int
-) -> dict:
-    """Run agent loop using OpenAI-style tool calling."""
-    messages = [
-        {"role": "user", "content": user_message}
-    ]
-    
-    iterations = 0
-    
     while not executor.is_done and iterations < max_iterations:
         iterations += 1
-        
-        # Call LLM with tools
-        response = client._raw_client.chat.completions.create(
-            model=client.model,
-            messages=[{"role": "system", "content": system_prompt}] + messages,
-            tools=TOOLS,
-            tool_choice="auto",
+
+        # Make LLM call - unified across all providers
+        response = client.complete_with_tools(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=STANDARD_TOOLS,
             max_tokens=16384,
             temperature=0.3
         )
-        
-        assistant_message = response.choices[0].message
-        
-        # Check if there are tool calls
-        if assistant_message.tool_calls:
+
+        tool_calls = response.get("tool_calls", [])
+        assistant_content = response.get("content", "")
+
+        # Process tool calls and add to message history
+        if tool_calls:
             # Add assistant message to history
-            messages.append({
-                "role": "assistant",
-                "content": assistant_message.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    }
-                    for tc in assistant_message.tool_calls
-                ]
-            })
-            
-            # Execute each tool call
-            for tool_call in assistant_message.tool_calls:
-                tool_name = tool_call.function.name
-                try:
-                    args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    args = {}
-                
-                result = executor.execute(tool_name, args)
-                
-                # Add tool result to messages
+            if client.provider in ("anthropic", "minimax"):
+                messages.append({"role": "assistant", "content": assistant_content})
+            else:
+                # OpenAI format - need to serialize tool calls
                 messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps({
-                        "success": result.success,
-                        "message": result.message,
-                        "data": result.data
-                    })
+                    "role": "assistant",
+                    "content": assistant_content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id if hasattr(tc, 'id') else tc.get('id'),
+                            "type": "function",
+                            "function": {
+                                "name": tc.name if hasattr(tc, 'name') else tc.get('name'),
+                                "arguments": json.dumps(tc.input if hasattr(tc, 'input') else tc.get('input'))
+                            }
+                        }
+                        for tc in tool_calls
+                    ]
                 })
-        else:
-            # No tool calls - LLM is done or confused
-            if assistant_message.content:
-                console.print(f"    [dim]Agent: {assistant_message.content[:100]}...[/dim]")
-            break
-    
-    if iterations >= max_iterations and not executor.is_done:
-        console.print(f"    [yellow]Warning: Hit max iterations ({max_iterations})[/yellow]")
-    
-    return {
-        "files_created": executor.files_created,
-        "files_updated": executor.files_updated,
-        "summary": executor.summary,
-        "iterations": iterations
-    }
 
-
-# Anthropic-style tool definitions
-ANTHROPIC_TOOLS = [
-    {
-        "name": "create_file",
-        "description": "Create a new file in the knowledge base. Use for new characters, events, themes, or facts.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative path for the file, e.g., 'characters/steve_jobs.md'"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Full markdown content. MUST include YAML frontmatter with a 'summary' field."
-                }
-            },
-            "required": ["path", "content"]
-        }
-    },
-    {
-        "name": "update_file",
-        "description": "Update an existing file with new information. Provide the complete updated content.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Path to the existing file to update"},
-                "content": {"type": "string", "description": "Complete updated markdown content"}
-            },
-            "required": ["path", "content"]
-        }
-    },
-    {
-        "name": "read_file",
-        "description": "Read the current content of a file in the knowledge base.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Path to the file to read"}
-            },
-            "required": ["path"]
-        }
-    },
-    {
-        "name": "list_files",
-        "description": "List all files currently in the knowledge base.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "done",
-        "description": "Signal that you have finished extracting and organizing all information from this chapter.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "summary": {"type": "string", "description": "Brief summary of what was extracted"}
-            },
-            "required": ["summary"]
-        }
-    }
-]
-
-
-def _run_anthropic_agent(
-    client: LLMClient,
-    executor: AgentToolExecutor,
-    system_prompt: str,
-    user_message: str,
-    max_iterations: int,
-    chapter_num: int
-) -> dict:
-    """Run agent loop using Anthropic-style tool calling (for Anthropic and MiniMax)."""
-    messages = [
-        {"role": "user", "content": user_message}
-    ]
-    
-    iterations = 0
-    
-    while not executor.is_done and iterations < max_iterations:
-        iterations += 1
-        
-        # Call LLM with tools (Anthropic API style)
-        response = client._raw_client.messages.create(
-            model=client.model,
-            system=system_prompt,
-            messages=messages,
-            tools=ANTHROPIC_TOOLS,
-            max_tokens=16384,  # Higher for thinking models like MiniMax M2.1
-            temperature=0.3
-        )
-        
-        # Process response content blocks
-        assistant_content = []
-        tool_uses = []
-        
-        for block in response.content:
-            if block.type == "thinking":
-                # MiniMax M2.1 returns thinking blocks - need to preserve them
-                assistant_content.append({
-                    "type": "thinking",
-                    "thinking": block.thinking,
-                    "signature": getattr(block, 'signature', '')
-                })
-            elif block.type == "text":
-                assistant_content.append({"type": "text", "text": block.text})
-            elif block.type == "tool_use":
-                tool_uses.append(block)
-                assistant_content.append({
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input
-                })
-        
-        # Add assistant message to history
-        messages.append({"role": "assistant", "content": assistant_content})
-        
-        if tool_uses:
-            # Execute tool calls and build results
+            # Execute each tool call
             tool_results = []
-            for tool_use in tool_uses:
-                result = executor.execute(tool_use.name, tool_use.input)
+            for tool in tool_calls:
+                if hasattr(tool, 'name'):
+                    tool_name = tool.name
+                    args = tool.input if hasattr(tool, 'input') else tool.get('input')
+                else:
+                    tool_name = tool.get('name')
+                    args = tool.get('input', {})
+
+                try:
+                    result = executor.execute(tool_name, args)
+                except Exception as e:
+                    result = ToolResult(success=False, message=f"Error: {str(e)}")
+
                 tool_results.append({
                     "type": "tool_result",
-                    "tool_use_id": tool_use.id,
+                    "tool_use_id": tool.id if hasattr(tool, 'id') else tool.get('id'),
                     "content": json.dumps({
                         "success": result.success,
                         "message": result.message,
                         "data": result.data
                     })
                 })
-            
+
             # Add tool results to messages
             messages.append({"role": "user", "content": tool_results})
-        
-        # Check if we should stop
-        if response.stop_reason == "end_turn" and not tool_uses:
+
+        else:
+            # No tool calls - LLM is done or confused
+            if assistant_content:
+                content_text = assistant_content
+                if isinstance(assistant_content, list):
+                    content_text = "".join(
+                        b.get("text", "") for b in assistant_content
+                        if b.get("type") == "text"
+                    )
+                if content_text:
+                    console.print(f"    [dim]Agent: {content_text[:100]}...[/dim]")
             break
-    
+
+        # Checkpointing Strategy (Manus Style)
+        # Prevent context window from growing indefinitely by "committing" the state
+        # to the file system and clearing the tool history.
+        CHECKPOINT_THRESHOLD = 20
+        if len(messages) > CHECKPOINT_THRESHOLD:
+            # 1. READ THE FILE SYSTEM (Ground Truth)
+            current_files = executor.brain.list_files()
+            current_structure = executor.brain.get_structure()
+
+            # 2. REFRESH SYSTEM PROMPT
+            # We must update the system prompt so the agent knows what files *now* exist
+            # instead of what existed at the start of the chapter.
+            system_prompt = _build_system_prompt(
+                current_structure, current_files, objective, chapter_num, is_generic
+            )
+
+            # 3. CREATE A CHECKPOINT MESSAGE
+            checkpoint_msg = {
+                "role": "user",
+                "content": f"""[SYSTEM INTERVENTION]
+You have completed {len(messages)} actions. To save context, we are clearing the action history.
+
+CURRENT STATUS:
+- Files Created/Updated: {len(current_files)}
+- Last Action: {messages[-1].get('content', 'Tool Execution')}
+
+The Chapter Text is still provided above. Continue extracting information based on the current file system state."""
+            }
+
+            # 4. RESET HISTORY
+            # Keep messages[0] (User Prompt with Chapter Text) to preserve KV-Cache
+            # Discard intermediate tool calls
+            # Add checkpoint message
+            messages = [messages[0], checkpoint_msg]
+            console.print(f"    [dim]Context Checkpoint: History cleared to save tokens (Files: {len(current_files)})[/dim]")
+
     if iterations >= max_iterations and not executor.is_done:
         console.print(f"    [yellow]Warning: Hit max iterations ({max_iterations})[/yellow]")
-    
+
     return {
         "files_created": executor.files_created,
         "files_updated": executor.files_updated,
         "summary": executor.summary,
         "iterations": iterations
     }
-

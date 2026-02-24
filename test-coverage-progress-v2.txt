@@ -4,3 +4,8 @@
 - **Tested**: brain.py get_objective() - user retrieves their original query from a brain
 - **Coverage**: 92% (68 missing lines, was 72)
 - **Learning**: get_objective() parses markdown to extract just the user's question text
+
+## Iteration 2
+- **Tested**: brain.py get_response()/update_response() - user retrieves synthesized answer after ingestion
+- **Coverage**: 93% (66 missing lines, was 68)
+- **Learning**: Response starts with placeholder, then system updates with synthesized answer

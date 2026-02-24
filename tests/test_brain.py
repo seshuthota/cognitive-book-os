@@ -3,6 +3,7 @@
 import sys
 import tempfile
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -109,6 +110,24 @@ class TestBrainFileOperations:
             
             # Now it should exist
             assert brain.exists() is True
+
+    def test_write_file_rejects_path_traversal(self):
+        """Test that write_file blocks paths escaping the brain root."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            brain = Brain("test-brain", base_path=tmpdir)
+            brain.initialize("Test objective")
+
+            with pytest.raises(ValueError):
+                brain.write_file("../outside.md", "bad")
+
+    def test_read_file_rejects_path_traversal(self):
+        """Test that read_file blocks paths escaping the brain root."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            brain = Brain("test-brain", base_path=tmpdir)
+            brain.initialize("Test objective")
+
+            with pytest.raises(ValueError):
+                brain.read_file("../../etc/passwd")
 
 
 class TestBrainInitialization:

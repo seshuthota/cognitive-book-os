@@ -25,6 +25,20 @@ class Brain:
         self.name = name
         self.base_path = Path(base_path)
         self.path = self.base_path / name
+
+    def _resolve_relative_path(self, relative_path: str) -> Path:
+        """Resolve a user-provided relative path safely within the brain root."""
+        candidate = Path(relative_path)
+        if candidate.is_absolute():
+            raise ValueError("Absolute paths are not allowed")
+
+        resolved = (self.path / candidate).resolve()
+        root = self.path.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Path traversal outside brain root is not allowed") from exc
+        return resolved
         
     @contextlib.contextmanager
     def _lock_log(self):
@@ -108,7 +122,7 @@ This file tracks the structure of the knowledge base.
         Returns:
             Absolute path to the file
         """
-        file_path = self.path / relative_path
+        file_path = self._resolve_relative_path(relative_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(content, encoding="utf-8")
         return file_path
@@ -123,7 +137,7 @@ This file tracks the structure of the knowledge base.
         Returns:
             File content or None if not found
         """
-        file_path = self.path / relative_path
+        file_path = self._resolve_relative_path(relative_path)
         if file_path.exists():
             return file_path.read_text(encoding="utf-8")
         return None
@@ -138,7 +152,7 @@ This file tracks the structure of the knowledge base.
         Returns:
             True if deleted, False if not found
         """
-        file_path = self.path / relative_path
+        file_path = self._resolve_relative_path(relative_path)
         if file_path.exists():
             file_path.unlink()
             return True
@@ -154,14 +168,15 @@ This file tracks the structure of the knowledge base.
         Returns:
             List of relative file paths
         """
-        search_path = self.path / directory if directory else self.path
+        search_path = self._resolve_relative_path(directory) if directory else self.path.resolve()
         if not search_path.exists():
             return []
         
+        root_path = self.path.resolve()
         files = []
         for file_path in search_path.rglob("*"):
             if file_path.is_file():
-                files.append(str(file_path.relative_to(self.path)))
+                files.append(str(file_path.relative_to(root_path)))
         return sorted(files)
     
     def get_structure(self) -> str:

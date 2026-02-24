@@ -84,6 +84,74 @@ def detect_duplicates(brain: Brain, threshold: float = 0.8) -> dict[str, list[st
     return clusters
 
 
+def run_gardener_for_brain(
+    brain: Brain,
+    *,
+    dry_run: bool = True,
+    provider: str = "anthropic",
+    model: str | None = None,
+    threshold: float = 0.8,
+) -> dict:
+    """
+    Execute gardener analysis (and optional merge apply) for a single brain.
+
+    Returns a report dictionary suitable for API/CLI reporting and persistence.
+    """
+    mode = "dry_run" if dry_run else "apply"
+    clusters = detect_duplicates(brain, threshold=threshold)
+    files_in_clusters = sum(len(items) for items in clusters.values())
+
+    summary_counts = {
+        "files_reviewed": len(brain.list_files()),
+        "duplicate_clusters": len(clusters),
+        "files_in_clusters": files_in_clusters,
+        "merges_proposed": len(clusters),
+        "merges_applied": 0,
+    }
+
+    llm_steps = {
+        "status": "skipped",
+        "executed": False,
+        "reason": "dry_run mode: no merge writes attempted",
+    }
+    issues: list[str] = []
+
+    if not dry_run and clusters:
+        try:
+            client = get_client(provider=provider, model=model)
+            llm_steps = {"status": "executed", "executed": True, "reason": ""}
+            for cluster in clusters.values():
+                try:
+                    if merge_cluster(brain, cluster, client):
+                        summary_counts["merges_applied"] += 1
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    issues.append(f"Failed to merge cluster {cluster}: {exc}")
+        except Exception as exc:
+            llm_steps = {
+                "status": "skipped",
+                "executed": False,
+                "reason": f"LLM unavailable: {exc}",
+            }
+            issues.append(f"LLM unavailable for apply mode: {exc}")
+
+    recommendations: list[str] = []
+    if summary_counts["duplicate_clusters"] > 0 and dry_run:
+        recommendations.append("Run in apply mode to merge suggested duplicate clusters.")
+    if llm_steps["status"] == "skipped" and not dry_run:
+        recommendations.append("Configure provider credentials to enable LLM-assisted merges.")
+    if summary_counts["duplicate_clusters"] == 0:
+        recommendations.append("No duplicate clusters detected; no gardener action required.")
+
+    return {
+        "mode": mode,
+        "summary_counts": summary_counts,
+        "llm_steps": llm_steps,
+        "issues": issues,
+        "recommendations": recommendations,
+        "clusters": [{"anchor": anchor, "files": files} for anchor, files in clusters.items()],
+    }
+
+
 def merge_cluster(
     brain: Brain, 
     cluster: list[str], 
@@ -209,7 +277,12 @@ Files to Merge:
             
     return True
 
-def optimize_brain(brain_name: str, provider: str = "anthropic"):
+def optimize_brain(
+    brain_name: str,
+    provider: str = "anthropic",
+    model: str | None = None,
+    dry_run: bool = False,
+):
     """
     Run the Gardener to optimize the brain.
     """
@@ -217,20 +290,33 @@ def optimize_brain(brain_name: str, provider: str = "anthropic"):
     if not brain.exists():
         console.print(f"[red]Brain {brain_name} not found.[/red]")
         return
-        
-    client = get_client(provider=provider)
-    console.print(f"[bold blue]Gardener: Optimizing '{brain_name}'[/bold blue]")
-    
-    console.print("[dim]Detecting duplicates...[/dim]")
-    clusters = detect_duplicates(brain)
-    
-    if not clusters:
+
+    action = "Analyzing" if dry_run else "Optimizing"
+    console.print(f"[bold blue]Gardener: {action} '{brain_name}'[/bold blue]")
+
+    report = run_gardener_for_brain(
+        brain,
+        dry_run=dry_run,
+        provider=provider,
+        model=model,
+    )
+
+    duplicate_clusters = report["summary_counts"]["duplicate_clusters"]
+    if duplicate_clusters == 0:
         console.print("[green]No duplicates detected.[/green]")
-        return
-        
-    console.print(f"[yellow]Found {len(clusters)} potential clusters.[/yellow]")
-    
-    for _, cluster in clusters.items():
-        merge_cluster(brain, cluster, client)
-        
-    console.print("[bold green]Optimization complete.[/bold green]")
+        return report
+
+    console.print(f"[yellow]Found {duplicate_clusters} potential clusters.[/yellow]")
+    for cluster in report["clusters"]:
+        console.print(f"[dim]- {cluster['files']}[/dim]")
+
+    if dry_run:
+        console.print("[green]Dry-run complete. No files were modified.[/green]")
+    else:
+        applied = report["summary_counts"]["merges_applied"]
+        console.print(f"[bold green]Optimization complete. Applied merges: {applied}[/bold green]")
+
+    if report["issues"]:
+        for issue in report["issues"]:
+            console.print(f"[yellow]Issue: {issue}[/yellow]")
+    return report

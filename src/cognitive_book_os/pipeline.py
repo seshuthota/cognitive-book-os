@@ -29,7 +29,8 @@ class IngestionStrategy(ABC):
         brain: Brain,
         client: LLMClient,
         objective: Optional[str] = None,
-        fast_mode: bool = False
+        fast_mode: bool = False,
+        run_id: str | None = None,
     ) -> ChapterState:
         """
         Process a single chapter.
@@ -54,7 +55,8 @@ class StandardStrategy(IngestionStrategy):
         brain: Brain,
         client: LLMClient,
         objective: Optional[str] = None,
-        fast_mode: bool = False
+        fast_mode: bool = False,
+        run_id: str | None = None,
     ) -> ChapterState:
         # Pass 1: Extract and organize using agent
         console.print("  [dim]Pass 1: Extracting information (agent)...[/dim]")
@@ -63,7 +65,8 @@ class StandardStrategy(IngestionStrategy):
             chapter_title=chapter_title,
             chapter_num=chapter_num,
             brain=brain,
-            client=client
+            client=client,
+            run_id=run_id,
         )
         console.print(f"  [dim]Created: {agent_result['files_created']}, Updated: {agent_result['files_updated']}, Iterations: {agent_result['iterations']}[/dim]")
         
@@ -106,12 +109,13 @@ class TriageStrategy(IngestionStrategy):
         brain: Brain,
         client: LLMClient,
         objective: Optional[str] = None,
-        fast_mode: bool = False
+        fast_mode: bool = False,
+        run_id: str | None = None,
     ) -> ChapterState:
         if not objective:
             # If no objective, we can't triage. Fallback to standard.
             return self.standard_strategy.process_chapter(
-                chapter_content, chapter_title, chapter_num, brain, client, objective, fast_mode
+                chapter_content, chapter_title, chapter_num, brain, client, objective, fast_mode, run_id
             )
             
         # Triage Step
@@ -149,7 +153,7 @@ Is this chapter relevant to the objective? Reply YES if it contains ANY potentia
             console.print(f"  [green]Relevant:[/green] {decision.reasoning}")
             # Delegate to Standard Strategy
             return self.standard_strategy.process_chapter(
-                chapter_content, chapter_title, chapter_num, brain, client, objective, fast_mode
+                chapter_content, chapter_title, chapter_num, brain, client, objective, fast_mode, run_id
             )
         else:
             console.print(f"  [yellow]Skipped:[/yellow] {decision.reasoning}")
